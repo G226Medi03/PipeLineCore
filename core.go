@@ -34,6 +34,21 @@ const (
 	NodeSkipped   NodeState = "skipped"
 )
 
+// CacheMode controls how an LLM request interacts with the response cache.
+type CacheMode int
+
+const (
+	// CacheInherit uses the run-level cache mode.
+	CacheInherit CacheMode = -1
+	// CacheUse reads and writes the shared LLM response cache.
+	CacheUse CacheMode = 0
+	// CacheBypass skips cache reads and writes a normal cache entry.
+	CacheBypass CacheMode = 1
+	// CacheRefresh skips cache reads, calls the live LLM, and refreshes the
+	// existing cache row with the new output.
+	CacheRefresh CacheMode = 2
+)
+
 // Event is emitted whenever a node changes state.
 type Event struct {
 	Node      NodeName
@@ -45,11 +60,40 @@ type Event struct {
 
 // Node is one executable stage in a Pipeline.
 type Node struct {
-	Name     NodeName
-	Stage    string
-	Kind     NodeKind
-	Run      func(context.Context, *State) error
-	Optional bool
+	Name      NodeName
+	Stage     string
+	Kind      NodeKind
+	CacheMode CacheMode
+	Run       func(context.Context, *State) error
+	Optional  bool
+}
+
+// NewNode creates a node with an explicit cache mode. Use CacheInherit to
+// inherit the run-level mode.
+func NewNode(
+	name NodeName,
+	stage string,
+	kind NodeKind,
+	cacheMode CacheMode,
+	run func(context.Context, *State) error,
+	optional bool,
+) Node {
+	return Node{
+		Name:      name,
+		Stage:     stage,
+		Kind:      kind,
+		CacheMode: cacheMode,
+		Run:       run,
+		Optional:  optional,
+	}
+}
+
+// CacheModeOr returns the node override or fallback when the node inherits.
+func (n Node) CacheModeOr(fallback CacheMode) CacheMode {
+	if n.CacheMode == CacheInherit {
+		return fallback
+	}
+	return n.CacheMode
 }
 
 // Pipeline is an ordered set of nodes. Handlers invoke a Pipeline for their
@@ -100,6 +144,9 @@ func (p Pipeline) Validate() error {
 		seen[node.Name] = struct{}{}
 		if node.Run == nil {
 			return fmt.Errorf("pipeline %q node %q has no run function", p.Name, node.Name)
+		}
+		if node.CacheMode < CacheInherit || node.CacheMode > CacheRefresh {
+			return fmt.Errorf("pipeline %q node %q has invalid cache mode %d", p.Name, node.Name, node.CacheMode)
 		}
 	}
 	return nil

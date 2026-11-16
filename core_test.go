@@ -7,31 +7,29 @@ import (
 	"testing"
 )
 
+func testNode(name NodeName, run func(context.Context, *State) error) Node {
+	return NewNode(name, "", "", CacheInherit, run, false)
+}
+
 func TestPipelineRunOrderAndState(t *testing.T) {
 	var order []string
 	pipeline := Pipeline{
 		Name: "test",
 		Nodes: []Node{
-			{
-				Name: "first",
-				Run: func(ctx context.Context, state *State) error {
-					order = append(order, "first")
-					state.Set("value", 41)
-					return nil
-				},
-			},
-			{
-				Name: "second",
-				Run: func(ctx context.Context, state *State) error {
-					order = append(order, "second")
-					value, ok := state.Get("value")
-					if !ok {
-						t.Fatal("value missing from state")
-					}
-					state.Set("value", value.(int)+1)
-					return nil
-				},
-			},
+			testNode("first", func(ctx context.Context, state *State) error {
+				order = append(order, "first")
+				state.Set("value", 41)
+				return nil
+			}),
+			testNode("second", func(ctx context.Context, state *State) error {
+				order = append(order, "second")
+				value, ok := state.Get("value")
+				if !ok {
+					t.Fatal("value missing from state")
+				}
+				state.Set("value", value.(int)+1)
+				return nil
+			}),
 		},
 	}
 
@@ -60,8 +58,8 @@ func TestPipelineStopsOnRequiredError(t *testing.T) {
 	pipeline := Pipeline{
 		Name: "test",
 		Nodes: []Node{
-			{Name: "fail", Run: func(context.Context, *State) error { return wantErr }},
-			{Name: "never", Run: func(context.Context, *State) error { ran = true; return nil }},
+			testNode("fail", func(context.Context, *State) error { return wantErr }),
+			testNode("never", func(context.Context, *State) error { ran = true; return nil }),
 		},
 	}
 	err := pipeline.Run(context.Background(), NewState())
@@ -78,8 +76,10 @@ func TestPipelineContinuesOptionalError(t *testing.T) {
 	pipeline := Pipeline{
 		Name: "test",
 		Nodes: []Node{
-			{Name: "optional", Optional: true, Run: func(context.Context, *State) error { return errors.New("ignored") }},
-			{Name: "next", Run: func(context.Context, *State) error { ran = true; return nil }},
+			NewNode("optional", "", "", CacheInherit, func(context.Context, *State) error {
+				return errors.New("ignored")
+			}, true),
+			testNode("next", func(context.Context, *State) error { ran = true; return nil }),
 		},
 	}
 	if err := pipeline.Run(context.Background(), NewState()); err != nil {
@@ -95,9 +95,9 @@ func TestPipelineRunFrom(t *testing.T) {
 	pipeline := Pipeline{
 		Name: "test",
 		Nodes: []Node{
-			{Name: "one", Run: func(context.Context, *State) error { order = append(order, "one"); return nil }},
-			{Name: "two", Run: func(context.Context, *State) error { order = append(order, "two"); return nil }},
-			{Name: "three", Run: func(context.Context, *State) error { order = append(order, "three"); return nil }},
+			testNode("one", func(context.Context, *State) error { order = append(order, "one"); return nil }),
+			testNode("two", func(context.Context, *State) error { order = append(order, "two"); return nil }),
+			testNode("three", func(context.Context, *State) error { order = append(order, "three"); return nil }),
 		},
 	}
 	if err := pipeline.RunFrom(context.Background(), NewState(), "two"); err != nil {
@@ -117,7 +117,7 @@ func TestPipelineRunFromUnknown(t *testing.T) {
 
 func TestPipelineValidate(t *testing.T) {
 	node := func(name NodeName) Node {
-		return Node{Name: name, Run: func(context.Context, *State) error { return nil }}
+		return testNode(name, func(context.Context, *State) error { return nil })
 	}
 	tests := []struct {
 		name     string
@@ -125,7 +125,12 @@ func TestPipelineValidate(t *testing.T) {
 	}{
 		{name: "empty node name", pipeline: Pipeline{Nodes: []Node{node("")}}},
 		{name: "duplicate node", pipeline: Pipeline{Nodes: []Node{node("same"), node("same")}}},
-		{name: "nil run", pipeline: Pipeline{Nodes: []Node{{Name: "broken"}}}},
+		{name: "nil run", pipeline: Pipeline{Nodes: []Node{
+			NewNode("broken", "", "", CacheInherit, nil, false),
+		}}},
+		{name: "invalid cache mode", pipeline: Pipeline{Nodes: []Node{
+			NewNode("bad-cache", "", "", CacheMode(99), func(context.Context, *State) error { return nil }, false),
+		}}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -136,5 +141,26 @@ func TestPipelineValidate(t *testing.T) {
 	}
 	if err := (Pipeline{Nodes: []Node{node("one")}}).Validate(); err != nil {
 		t.Fatalf("valid pipeline: %v", err)
+	}
+}
+
+func TestNewNodeCacheMode(t *testing.T) {
+	node := NewNode("explain", "explain", KindLLM, CacheRefresh, func(context.Context, *State) error { return nil }, false)
+	if node.Name != "explain" || node.Stage != "explain" || node.Kind != KindLLM {
+		t.Fatalf("node = %#v", node)
+	}
+	if node.CacheMode != CacheRefresh {
+		t.Fatalf("CacheMode = %d, want %d", node.CacheMode, CacheRefresh)
+	}
+}
+
+func TestNodeCacheModeOr(t *testing.T) {
+	inherit := NewNode("inherit", "", "", CacheInherit, nil, false)
+	if got := inherit.CacheModeOr(CacheBypass); got != CacheBypass {
+		t.Fatalf("CacheModeOr = %d, want %d", got, CacheBypass)
+	}
+	override := NewNode("override", "", "", CacheUse, nil, false)
+	if got := override.CacheModeOr(CacheBypass); got != CacheUse {
+		t.Fatalf("CacheModeOr = %d, want %d", got, CacheUse)
 	}
 }

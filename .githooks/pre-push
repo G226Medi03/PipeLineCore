@@ -1,0 +1,22 @@
+#!/bin/sh
+
+set -eu
+
+if command -v powershell.exe >/dev/null 2>&1; then
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/lint.ps1
+  exit $?
+fi
+
+if [ -x ./bin/custom-gcl.exe ]; then
+  ./bin/custom-gcl.exe run ./...
+  exit $?
+fi
+
+if [ -x ./bin/custom-gcl ]; then
+  ./bin/custom-gcl run ./...
+  exit $?
+fi
+
+echo "[pre-push] custom golangci-lint is not built." >&2
+echo "[pre-push] run scripts/lint.ps1 first." >&2
+exit 1
