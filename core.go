@@ -34,6 +34,21 @@ const (
 	NodeSkipped   NodeState = "skipped"
 )
 
+// Logger is the small logging surface shared by pipeline components.
+type Logger interface {
+	Info(msg string, attrs ...any)
+	Error(msg string, attrs ...any)
+}
+
+// NopLogger discards all log records.
+type NopLogger struct{}
+
+// Info discards an info log record.
+func (NopLogger) Info(string, ...any) {}
+
+// Error discards an error log record.
+func (NopLogger) Error(string, ...any) {}
+
 // CacheMode controls how an LLM request interacts with the response cache.
 type CacheMode int
 
